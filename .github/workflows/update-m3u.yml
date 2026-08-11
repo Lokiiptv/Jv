@@ -1,0 +1,252 @@
+name: Auto Update JioTV M3U
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Download JioTV JSON
+        run: |
+          curl -L \
+            --fail \
+            --retry 5 \
+            --retry-delay 5 \
+            "https://playify.pages.dev/Jiotv.json" \
+            -o Jiotv.json
+
+      - name: Convert JSON to M3U
+        run: |
+          python3 <<'PY'
+          import json
+
+          SOURCE = "Jiotv.json"
+          OUTPUT = "playlist.m3u"
+
+          with open(SOURCE, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          # Find channel array
+          if isinstance(data, list):
+              channels = data
+
+          elif isinstance(data, dict):
+              channels = None
+
+              for key in [
+                  "channels",
+                  "data",
+                  "items",
+                  "results",
+                  "result",
+                  "playlist"
+              ]:
+                  if isinstance(data.get(key), list):
+                      channels = data[key]
+                      break
+
+              if channels is None:
+                  channels = []
+
+          else:
+              channels = []
+
+          def first(item, keys, default=""):
+              for key in keys:
+                  value = item.get(key)
+
+                  if value is not None and str(value).strip():
+                      return str(value).strip()
+
+              return default
+
+          output = ["#EXTM3U"]
+
+          added = 0
+
+          for ch in channels:
+
+              if not isinstance(ch, dict):
+                  continue
+
+              name = first(
+                  ch,
+                  [
+                      "name",
+                      "channel_name",
+                      "channelName",
+                      "title"
+                  ],
+                  "Unknown Channel"
+              )
+
+              tvg_id = first(
+                  ch,
+                  [
+                      "tvg-id",
+                      "tvg_id",
+                      "id",
+                      "channel_id",
+                      "channelId"
+                  ]
+              )
+
+              logo = first(
+                  ch,
+                  [
+                      "tvg-logo",
+                      "tvg_logo",
+                      "logo",
+                      "logo_url",
+                      "channel_logo",
+                      "channelLogo"
+                  ]
+              )
+
+              group = first(
+                  ch,
+                  [
+                      "group-title",
+                      "group",
+                      "category",
+                      "genre",
+                      "language"
+                  ],
+                  "JioTV"
+              )
+
+              url = first(
+                  ch,
+                  [
+                      "url",
+                      "stream_url",
+                      "streamUrl",
+                      "channel_url",
+                      "channelUrl",
+                      "stream",
+                      "link",
+                      "m3u8",
+                      "mpd",
+                      "manifest",
+                      "playback_url",
+                      "playbackUrl"
+                  ]
+              )
+
+              if not url:
+                  continue
+
+              extinf = '#EXTINF:-1'
+
+              if tvg_id:
+                  extinf += f' tvg-id="{tvg_id}"'
+
+              extinf += f' tvg-name="{name}"'
+
+              if logo:
+                  extinf += f' tvg-logo="{logo}"'
+
+              if group:
+                  extinf += f' group-title="{group}"'
+
+              extinf += f',{name}'
+
+              output.append(extinf)
+
+              # Optional headers
+              user_agent = first(
+                  ch,
+                  ["user-agent", "user_agent", "userAgent"]
+              )
+
+              referer = first(
+                  ch,
+                  ["referer", "referrer"]
+              )
+
+              origin = first(
+                  ch,
+                  ["origin"]
+              )
+
+              if user_agent:
+                  output.append(
+                      f'#EXTVLCOPT:http-user-agent={user_agent}'
+                  )
+
+              if referer:
+                  output.append(
+                      f'#EXTVLCOPT:http-referrer={referer}'
+                  )
+
+              if origin:
+                  output.append(
+                      f'#EXTVLCOPT:http-origin={origin}'
+                  )
+
+              # ClearKey / DRM support if present
+              key_id = first(
+                  ch,
+                  ["KeyId", "keyid", "key_id", "kid"]
+              )
+
+              key = first(
+                  ch,
+                  ["Key", "key", "clearkey"]
+              )
+
+              if key_id and key:
+                  output.append(
+                      '#KODIPROP:inputstream.adaptive.license_type=clearkey'
+                  )
+                  output.append(
+                      f'#KODIPROP:inputstream.adaptive.license_key={key_id}:{key}'
+                  )
+
+              output.append(url)
+
+              added += 1
+
+          with open(OUTPUT, "w", encoding="utf-8") as f:
+              f.write("\n".join(output) + "\n")
+
+          print(f"Created {OUTPUT}")
+          print(f"Total channels: {added}")
+
+          if added == 0:
+              raise SystemExit(
+                  "ERROR: No channels with stream URLs found."
+              )
+
+          PY
+
+      - name: Show Playlist Info
+        run: |
+          echo "Playlist generated"
+          grep -c "^#EXTINF" playlist.m3u || true
+          head -20 playlist.m3u
+
+      - name: Commit Updated Playlist
+        run: |
+          git config user.name "LOKIIPTV Bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add playlist.m3u
+
+          if git diff --cached --quiet; then
+            echo "No changes found"
+          else
+            git commit -m "Auto update JioTV playlist"
+            git push
+          fi
