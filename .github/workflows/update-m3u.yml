@@ -3,7 +3,6 @@ name: Auto Update JioTV M3U
 on:
   schedule:
     - cron: "*/30 * * * *"
-
   workflow_dispatch:
 
 permissions:
@@ -29,224 +28,130 @@ jobs:
       - name: Convert JSON to M3U
         run: |
           python3 <<'PY'
+          import html
           import json
+          import re
 
           SOURCE = "Jiotv.json"
           OUTPUT = "playlist.m3u"
+          EPG_URL = "https://raw.githubusercontent.com/mitthu786/tvepg/main/tataplay/epg.xml.gz"
+          USER_AGENT = "plaYtv/7.1.3 (Linux;Android 13) - @Vortex Tv - ExoPlayerLib/824.0"
+          PROMO_NAME = "Install NetX Player"
+          PROMO_TITLE = "Join Telegram: @streamstartv"
+          PROMO_LOGO = "https://i.ibb.co/p67zjNDb/Install-Now-Net-X-Player.gif"
+          PROMO_URL = "https://t.me/streamstartv"
 
           with open(SOURCE, "r", encoding="utf-8") as f:
               data = json.load(f)
 
-          # Find channel array
           if isinstance(data, list):
               channels = data
-
           elif isinstance(data, dict):
-              channels = None
-
-              for key in [
-                  "channels",
-                  "data",
-                  "items",
-                  "results",
-                  "result",
-                  "playlist"
-              ]:
+              channels = []
+              for key in ["channels", "data", "items", "results", "result", "playlist"]:
                   if isinstance(data.get(key), list):
                       channels = data[key]
                       break
-
-              if channels is None:
-                  channels = []
-
           else:
               channels = []
 
           def first(item, keys, default=""):
               for key in keys:
                   value = item.get(key)
-
                   if value is not None and str(value).strip():
                       return str(value).strip()
-
               return default
 
-          output = ["#EXTM3U"]
+          def attr(value):
+              return html.escape(str(value), quote=True)
+
+          def slug(value):
+              value = re.sub(r"[^a-zA-Z0-9]+", "-", str(value).strip().lower())
+              return value.strip("-") or "unknown-channel"
+
+          output = [f'#EXTM3U x-tvg-url="{attr(EPG_URL)}"']
+          output.extend([
+              f'#EXTINF:-1 tvg-id="sf-top" tvg-name="{attr(PROMO_TITLE)}" '
+              f'tvg-logo="{attr(PROMO_LOGO)}" group-logo="{attr(PROMO_LOGO)}" '
+              f'group-title="{attr(PROMO_TITLE)}",{PROMO_NAME}',
+              PROMO_URL,
+              "",
+          ])
 
           added = 0
-
           for ch in channels:
-
               if not isinstance(ch, dict):
                   continue
 
-              name = first(
-                  ch,
-                  [
-                      "name",
-                      "channel_name",
-                      "channelName",
-                      "title"
-                  ],
-                  "Unknown Channel"
-              )
-
-              tvg_id = first(
-                  ch,
-                  [
-                      "tvg-id",
-                      "tvg_id",
-                      "id",
-                      "channel_id",
-                      "channelId"
-                  ]
-              )
-
-              logo = first(
-                  ch,
-                  [
-                      "tvg-logo",
-                      "tvg_logo",
-                      "logo",
-                      "logo_url",
-                      "channel_logo",
-                      "channelLogo"
-                  ]
-              )
-
-              group = first(
-                  ch,
-                  [
-                      "group-title",
-                      "group",
-                      "category",
-                      "genre",
-                      "language"
-                  ],
-                  "JioTV"
-              )
-
-              url = first(
-                  ch,
-                  [
-                      "url",
-                      "stream_url",
-                      "streamUrl",
-                      "channel_url",
-                      "channelUrl",
-                      "stream",
-                      "link",
-                      "m3u8",
-                      "mpd",
-                      "manifest",
-                      "playback_url",
-                      "playbackUrl"
-                  ]
-              )
-
+              name = first(ch, ["name", "channel_name", "channelName", "title"], "Unknown Channel")
+              tvg_id = first(ch, ["tvg-id", "tvg_id", "id", "channel_id", "channelId"], slug(name))
+              logo = first(ch, ["tvg-logo", "tvg_logo", "logo", "logo_url", "channel_logo", "channelLogo"])
+              group = first(ch, ["group-title", "group", "category", "genre", "language"], "JioTV")
+              group_logo = first(ch, ["group-logo", "group_logo", "groupLogo"], logo)
+              url = first(ch, ["url", "stream_url", "streamUrl", "channel_url", "channelUrl", "stream", "link", "m3u8", "mpd", "manifest", "playback_url", "playbackUrl"])
               if not url:
                   continue
 
-              extinf = '#EXTINF:-1'
-
-              if tvg_id:
-                  extinf += f' tvg-id="{tvg_id}"'
-
-              extinf += f' tvg-name="{name}"'
-
+              extinf = (
+                  f'#EXTINF:-1 tvg-id="{attr(tvg_id)}" '
+                  f'tvg-name="{attr(name)}"'
+              )
               if logo:
-                  extinf += f' tvg-logo="{logo}"'
-
-              if group:
-                  extinf += f' group-title="{group}"'
-
-              extinf += f',{name}'
-
+                  extinf += f' tvg-logo="{attr(logo)}"'
+              if group_logo:
+                  extinf += f' group-logo="{attr(group_logo)}"'
+              extinf += f' group-title="{attr(group)}",{name}'
               output.append(extinf)
 
-              # Optional headers
-              user_agent = first(
-                  ch,
-                  ["user-agent", "user_agent", "userAgent"]
-              )
+              output.append(f"#EXTVLCOPT:http-user-agent={USER_AGENT}")
 
-              referer = first(
-                  ch,
-                  ["referer", "referrer"]
-              )
-
-              origin = first(
-                  ch,
-                  ["origin"]
-              )
-
-              if user_agent:
-                  output.append(
-                      f'#EXTVLCOPT:http-user-agent={user_agent}'
-                  )
-
+              referer = first(ch, ["referer", "referrer"])
+              origin = first(ch, ["origin"])
               if referer:
-                  output.append(
-                      f'#EXTVLCOPT:http-referrer={referer}'
-                  )
-
+                  output.append(f"#EXTVLCOPT:http-referrer={referer}")
               if origin:
-                  output.append(
-                      f'#EXTVLCOPT:http-origin={origin}'
-                  )
+                  output.append(f"#EXTVLCOPT:http-origin={origin}")
 
-              # ClearKey / DRM support if present
-              key_id = first(
-                  ch,
-                  ["KeyId", "keyid", "key_id", "kid"]
-              )
+              cookie = first(ch, ["cookie", "cookies", "http-cookie"])
+              if cookie:
+                  cookie_json = json.dumps({"cookie": cookie}, ensure_ascii=False, separators=(",", ":"))
+                  output.append(f"#EXTHTTP:{cookie_json}")
 
-              key = first(
-                  ch,
-                  ["Key", "key", "clearkey"]
-              )
-
+              drm_license = first(ch, ["drmLicense", "drm_license", "license", "clearkey"])
+              key_id = first(ch, ["KeyId", "keyid", "key_id", "kid"])
+              key = first(ch, ["Key", "key"])
+              if drm_license and ":" in drm_license:
+                  key_id, key = drm_license.split(":", 1)
               if key_id and key:
-                  output.append(
-                      '#KODIPROP:inputstream.adaptive.license_type=clearkey'
-                  )
-                  output.append(
-                      f'#KODIPROP:inputstream.adaptive.license_key={key_id}:{key}'
-                  )
+                  output.append("#KODIPROP:inputstream.adaptive.license_type=clearkey")
+                  output.append(f"#KODIPROP:inputstream.adaptive.license_key={key_id}:{key}")
 
-              output.append(url)
-
+              output.extend([url, ""])
               added += 1
 
           with open(OUTPUT, "w", encoding="utf-8") as f:
-              f.write("\n".join(output) + "\n")
+              f.write("\n".join(output).rstrip() + "\n")
 
           print(f"Created {OUTPUT}")
           print(f"Total channels: {added}")
-
           if added == 0:
-              raise SystemExit(
-                  "ERROR: No channels with stream URLs found."
-              )
-
+              raise SystemExit("ERROR: No channels with stream URLs found.")
           PY
 
       - name: Show Playlist Info
         run: |
           echo "Playlist generated"
           grep -c "^#EXTINF" playlist.m3u || true
-          head -20 playlist.m3u
+          head -30 playlist.m3u
 
       - name: Commit Updated Playlist
         run: |
           git config user.name "LOKIIPTV Bot"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
           git add playlist.m3u
-
           if git diff --cached --quiet; then
             echo "No changes found"
           else
-            git commit -m "Auto update JioTV playlist"
+            git commit -m "Format M3U playlist with DRM and HTTP metadata"
             git push
           fi
